@@ -52,7 +52,7 @@ function Movie(movie) {
   this.total_votes = movie.vote_count;
   this.average_votes = movie.vote_average;
   this.popularity = movie.popularity;
-  this.image_url = movie.backdrop_path; //not working
+  this.image_url = `https://image.tmdb.org/t/p/w600_and_h900_bestv2${movie.poster_path}`;
   this.overview = movie.overview;
 }
 
