@@ -4,8 +4,9 @@
 const express = require('express');
 const superagent = require('superagent');
 const cors = require('cors');
+const pg = require('pg');
 
-// Load environment variables from .env file
+// Load environment variables
 require('dotenv').config();
 
 // Application Setup
@@ -13,13 +14,13 @@ const app = express();
 const PORT = process.env.PORT;
 app.use(cors());
 
-// API Routes
-app.get('/location', (request, response) => {
-  searchToLatLong(request.query.data)
-    .then(location => response.send(location))
-    .catch(error => handleError(error, response));
-})
+// Database Setup
+const client = new pg.Client(process.env.DATABASE_URL);
+client.connect();
+client.on('error', err => console.error(err));
 
+// API Routes
+app.get('/location', getLocation);
 app.get('/weather', getWeather);
 app.get('/movies', getMovies);
 app.get('/yelp', getYelp);
@@ -29,20 +30,48 @@ app.get('/trails' , getTrails)
 // Make sure the server is listening for requests
 app.listen(PORT, () => console.log(`Listening on ${PORT}`));
 
-// Error handler
-function handleError(err, res) {
-  // console.error(err);
-  if (res) res.status(500).send('Sorry, something went wrong');
-}
+//============ Models============//
 
-// Models
+// Location
 function Location(query, res) {
+  this.tableName = 'locations'
   this.search_query = query;
   this.formatted_query = res.body.results[0].formatted_address;
   this.latitude = res.body.results[0].geometry.location.lat;
   this.longitude = res.body.results[0].geometry.location.lng;
+  this.created_at = Date.now();
 }
+Location.lookupLocation = (location) => {
+  const SQL = `SELECT * FROM locations WHERE search_query=$1;`
+  const values = [location.query];
 
+  return client.query(SQL, values)
+    .then(result => {
+      if(result.rowCount > 0){
+        console.log('Match On Location')
+        location.cacheHit(result);
+      }else {
+        console.log('No Location Match')
+        location.cacheMiss();
+      }
+    })
+    .catch(console.error)
+}
+Location.prototype = {
+  save: function () {
+    console.log(`saving new location`)
+    const SQL = `INSERT INTO locations (search_query, formatted_query, latitude, longitude) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`
+    const values = [this.search_query, this.formatted_query, this.latitude, this.longitude];
+
+    return client.query(SQL, values)
+      .then(result => {
+        this.id = result.rows[0].id;
+        return this
+      });
+  }
+};
+
+// Weather
 function Weather(day) {
   this.forecast = day.summary;
   this.time = new Date(day.time * 1000).toString().slice(0, 15);
@@ -87,14 +116,27 @@ function Trails(trail){
 }
 
 // Helper Functions
-function searchToLatLong(query) {
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${process.env.GEOCODE_API_KEY}`;
+function getLocation(request, response){
+  Location.lookupLocation({
+    tableName: Location.tableName,
+    query: request.query.data,
 
-  return superagent.get(url)
-    .then(res => {
-      return new Location(query, res);
-    })
-    .catch(error => handleError(error));
+    cacheHit: function(result){
+      console.log(result.rows[0])
+      response.send(result.rows[0])
+    },
+    cacheMiss: function(){
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${this.query}&key=${process.env.GEOCODE_API_KEY}`;
+
+      return superagent.get(url)
+        .then(res => {
+          const location = new Location(this.query, res);
+          location.save()
+            .then(location => response.send(location));
+        })
+        .catch(error => handleError(error));
+    }
+  })
 }
 
 function getWeather(request, response) {
@@ -144,10 +186,8 @@ function getTrails(request, response){
   superagent.get(url)
     .then(result => {
       const trailsSum = result.body.trails.map(trail => {
-        console.log(trail.conditionDate.slice(0,10))
         return new Trails(trail)
       })
-      console.log(`constructed`)
       response.send(trailsSum)
     })
     .catch(error => handleError(error, response))
@@ -166,3 +206,9 @@ function getYelp(request, response) {
     })
     .catch(error => handleError(error, response));
 }
+// Error handler
+function handleError(err, res) {
+  // console.error(err);
+  if (res) res.status(500).send('Sorry, something went wrong');
+}
+
