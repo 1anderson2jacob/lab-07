@@ -114,7 +114,7 @@ function Trails(trail){
   this.star_votes = trail.starVotes
   this.summary = trail.summary
 }
-
+//ad
 // Helper Functions
 function getLocation(request, response){
   Location.lookupLocation({
